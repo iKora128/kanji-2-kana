@@ -129,7 +129,7 @@ class UnslothAlignPropConfig(AlignPropConfig):
     )
     def __init__(
         self,
-        exp_name = 'fast_inference',
+        exp_name = 'train_gemma3_1b_kanji2kana_sft_l4_optimized',
         run_name = '',
         seed = 3407,
         log_with = None,

@@ -25,7 +25,7 @@ import torch
 import os
 import gc
 import re
-from datasets import Dataset
+from datasets import Dataset, load_dataset, load_from_disk
 from unsloth import FastModel
 from unsloth.chat_templates import get_chat_template
 from trl import GRPOTrainer, GRPOConfig
@@ -281,12 +281,25 @@ dataset_files = [
     "data/train_wikipedia.jsonl"
 ]
 
-print("📚 改良版GRPO用データセットを作成中...")
-sample_rate = 0.2
-max_samples = 25000
-
-dataset = load_grpo_dataset(dataset_files, max_samples=max_samples, sample_rate=sample_rate)
-dataset = dataset.map(apply_chat_template, batched=True, remove_columns=["conversations"])
+print("📚 datasetsライブラリでGRPO用データセットをロード＆キャッシュ中...")
+cache_dir = "cache/grpo_arrow"
+if not os.path.exists(cache_dir):
+    raw = load_dataset("json", data_files=dataset_files, split="train")
+    raw = raw.filter(
+        lambda ex: 5 <= len(ex["output"]) <= 60 and 5 <= len(ex["input"]) <= 60 and analyze_text_composition(ex["input"])["katakana_ratio"] >= 0.8,
+        num_proc=4
+    )
+    raw = raw.map(
+        lambda examples: {"conversations":[format_gemma3_conversation(o,i)["conversations"] for o,i in zip(examples["output"], examples["input"]) ]},
+        batched=True, batch_size=1000, num_proc=4, remove_columns=["input","output","left_context"]
+    )
+    raw.save_to_disk(cache_dir)
+dataset = load_from_disk(cache_dir)
+print("🔄 トークナイズをバッチ・並列で実行中...")
+dataset = dataset.map(
+    lambda examples: {"text":[tokenizer.apply_chat_template(conv, tokenize=False, add_generation_prompt=False) for conv in examples["conversations"]]},
+    batched=True, batch_size=1000, num_proc=4, remove_columns=["conversations"]
+)
 
 # サンプル確認
 print("\n=== 📋 改良版GRPOサンプル確認 ===")

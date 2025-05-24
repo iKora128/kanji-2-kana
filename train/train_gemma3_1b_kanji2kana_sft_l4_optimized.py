@@ -24,7 +24,7 @@ import json
 import torch
 import os
 import gc
-from datasets import Dataset
+from datasets import Dataset, load_dataset, load_from_disk
 from unsloth import FastModel
 from unsloth.chat_templates import get_chat_template
 from trl import SFTTrainer, SFTConfig
@@ -178,16 +178,25 @@ dataset_files = [
     "data/train_wikipedia.jsonl"
 ]
 
-print("📚 L4最大活用 Gemma-3用データセットを作成中...")
-# L4の23GBメモリを最大限活用してより多くのデータを処理
-sample_rate = 0.4      # 40%をサンプリング（約13.6GBのデータ量）
-max_samples = 80000    # 最大サンプル数を大幅増加
-
-dataset = load_optimized_streaming_dataset(dataset_files, max_samples=max_samples, sample_rate=sample_rate)
-
-# チャットテンプレートを適用
-print("🔄 チャットテンプレートを適用中...")
-dataset = dataset.map(apply_chat_template, batched=True, remove_columns=["conversations"])
+print("📚 datasetsライブラリでデータセットをロード＆キャッシュ中...")
+cache_dir = "cache/sft_l4_arrow"
+if not os.path.exists(cache_dir):
+    raw = load_dataset("json", data_files=dataset_files, split="train")
+    raw = raw.filter(
+        lambda ex: 3 <= len(ex["output"]) <= 80 and 3 <= len(ex["input"]) <= 80 and sum(1 for c in ex["input"] if '\u30A0' <= c <= '\u30FF') / max(len(ex["input"].replace(" ","")),1) >= 0.7,
+        num_proc=16
+    )
+    raw = raw.map(
+        lambda examples: {"conversations":[format_gemma3_conversation(o,i)["conversations"] for o,i in zip(examples["output"], examples["input"])]},
+        batched=True, batch_size=1000, num_proc=16, remove_columns=["input","output","left_context"]
+    )
+    raw.save_to_disk(cache_dir)
+dataset = load_from_disk(cache_dir)
+print("🔄 トークナイズをバッチ・並列で実行中...")
+dataset = dataset.map(
+    lambda examples: {"text":[tokenizer.apply_chat_template(conv, tokenize=False) for conv in examples["conversations"]]},
+    batched=True, batch_size=1000, num_proc=16, remove_columns=["conversations"]
+)
 
 # サンプル確認
 print("\n=== 📋 L4最適化サンプル確認 ===")
@@ -216,7 +225,7 @@ trainer = SFTTrainer(
         per_device_train_batch_size=96,  # L4の23GBメモリを最大活用（大幅増加）
         gradient_accumulation_steps=2,   # 実効バッチサイズ = 192
         warmup_steps=150,                # より多くのウォームアップ
-        num_train_epochs=3,              # エポック数増加
+        num_train_epochs=30,              # エポック数増加
         learning_rate=1e-3,              # より大きなバッチサイズに対応
         logging_steps=5,                 # より細かいログ出力（TensorBoard用）
         save_steps=100,                  # より頻繁な保存

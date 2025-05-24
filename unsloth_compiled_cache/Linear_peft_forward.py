@@ -18,13 +18,13 @@ torch_addmm = torch.addmm
 torch_add   = torch.add
 # @torch.compile(fullgraph = False, dynamic = True, options = torch_compile_options)
 def lora_forward(result, lora_A, lora_B, dropout, x, scaling):
-    xA = dropout(x) @ lora_A.weight.t()
+    xA = dropout(x.to(torch.float16)) @ lora_A.weight.to(torch.float16).t()
     # output = result + scaling * xA @ lora_B.weight.t()
     shape = result.shape
     output = torch_addmm(
         result.view(-1, shape[-1]),
         xA.view(-1, xA.shape[-1]),
-        lora_B.weight.t(),
+        lora_B.weight.to(torch.float16).t(),
         alpha = scaling,
         beta = 1,
     ).view(shape)
@@ -33,7 +33,7 @@ def lora_forward(result, lora_A, lora_B, dropout, x, scaling):
     if bias is not None:
         output = torch_add(
         output,
-        bias,
+        bias.to(torch.float16),
         alpha = scaling,
     )
     return output
@@ -64,7 +64,7 @@ def unsloth_forward(self, x: torch.Tensor, *args: Any, **kwargs: Any) -> torch.T
             lora_B = self.lora_B[active_adapter]
             dropout = self.lora_dropout[active_adapter]
             scaling = self.scaling[active_adapter]
-            if not torch.is_autocast_enabled(): result, x = result.to(lora_A.weight.dtype), x.to(lora_A.weight.dtype)
+            
 
             if not self.use_dora[active_adapter]:
                 return lora_forward(result, lora_A, lora_B, dropout, x, scaling)
