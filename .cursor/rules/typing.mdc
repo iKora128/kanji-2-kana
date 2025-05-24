@@ -1,0 +1,25 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+python書くときには型ヒントを3.10以降の記法にしてください
+なのでtypingは基本使わない
+
+List -> list
+Optinol -> <A> | None
+
+<例>
+```python
+from typing import List Dict
+a = List[...]
+b: Optional[int] = 12
+```
+
+ではなく
+```python
+a = list[...]
+b: int | None = 12
+```
+
+またpythonファイルのときに上部にscriptを入れない

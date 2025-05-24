@@ -1,0 +1,42 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+最新のGoogle gemini APIを使って開発してください
+ライブラリと基本構造は以下です
+
+```bash
+uv add google-genai
+```
+
+基本的な構造
+```python
+from google import genai
+
+client = genai.Client(api_key="YOUR_API_KEY")
+
+response = client.models.generate_content(
+    model="gemini-2.5-flash-preview-05-20", contents="Explain how AI works in a few words"
+)
+print(response.text)
+```
+
+GenerateContentConfig オブジェクトを使用すると、temperature などのデフォルトの生成パラメータをオーバーライドすることもできます。
+
+```python
+from google import genai
+from google.genai import types
+
+client = genai.Client(api_key="GEMINI_API_KEY")
+
+response = client.models.generate_content(
+    model="gemini-2.5-flash-preview-05-20",
+    contents=["Explain how AI works"],
+    config=types.GenerateContentConfig(
+        system_instruction="You are a cat. Your name is Neko.", # システム指示
+        max_output_tokens=2000, # token
+    )
+)
+print(response.text)
+```
