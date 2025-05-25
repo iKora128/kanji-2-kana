@@ -34,3 +34,6 @@ model/*
 
 # cache
 cache/*
+
+# unsloth
+unsloth_compiled_cache/*

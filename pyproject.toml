@@ -1,7 +1,7 @@
 [project]
 name = "kanji-2-kana"
 version = "0.1.0"
-description = "Add your description here"
+description = "Kanji to Kana conversion model training"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -24,4 +24,17 @@ dependencies = [
     "unsloth>=2025.5.7",
     "protobuf<4.0.0",
     "torchvision>=0.22.0",
+    "tensorboard>=2.19.0",
 ]
+
+[project.optional-dependencies]
+build = ["torch", "setuptools", "packaging"]
+compile = ["flash-attn"]
+
+[tool.uv]
+no-build-isolation-package = ["flash-attn"]
+
+[[tool.uv.dependency-metadata]]
+name = "flash-attn"
+version = "2.7.3"
+requires-dist = ["torch", "einops"]

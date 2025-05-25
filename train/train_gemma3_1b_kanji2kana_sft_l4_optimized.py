@@ -34,9 +34,13 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:256,expandable_segmen
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
+# 定数設定
+MAX_TRAIN_SAMPLES: int = 1000000   # 学習に使用するサンプル上限を100万件に変更
+
 # L4最適化モデル設定（23GB活用）
 max_seq_length = 320   # カタカナ変換に最適な長さ（効率重視）
-lora_rank = 64         # LoRAランクを大幅増加（品質向上）
+lora_rank = 16          # LoRAランクを最適化（漢字→カタカナに十分）
+lora_alpha = 32        # より適切なalpha値
 
 print("🚀 L4最適化 Gemma-3-1Bモデルとトークナイザーを読み込み中...")
 model, tokenizer = FastModel.from_pretrained(
@@ -44,6 +48,7 @@ model, tokenizer = FastModel.from_pretrained(
     max_seq_length=max_seq_length,
     load_in_4bit=True,
     dtype=torch.bfloat16,  # より効率的な精度
+    use_gradient_checkpointing=True,  # グラデーションチェックポイントを有効化
 )
 
 # Gemma-3チャットテンプレート設定
@@ -61,7 +66,7 @@ model = FastModel.get_peft_model(
     finetune_attention_modules=True,
     finetune_mlp_modules=True,
     r=lora_rank,
-    lora_alpha=lora_rank * 2,      # より積極的な学習
+    lora_alpha=lora_alpha,      # より適切なalpha値
     lora_dropout=0.03,             # 過学習防止を少し緩和
     bias="none",
     random_state=3407,
@@ -80,89 +85,6 @@ def format_gemma3_conversation(kanji_text: str, katakana_text: str) -> dict:
         }
     ]
     return {"conversations": messages}
-
-def load_optimized_streaming_dataset(file_paths: list[str], max_samples: int = 80000, sample_rate: float = 0.4) -> Dataset:
-    """
-    L4最適化版：大容量データセットを効率的に読み込む
-    sample_rate: サンプリング率（0.4 = 40%をサンプリング）
-    """
-    data = []
-    sample_count = 0
-    total_lines = 0
-    
-    for file_path in file_paths:
-        print(f"📖 大容量データ読み込み開始: {file_path}")
-        
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                for line_num, line in enumerate(f):
-                    total_lines += 1
-                    
-                    # サンプリング：より多くのデータを使用
-                    if torch.rand(1).item() > sample_rate:
-                        continue
-                        
-                    if sample_count >= max_samples:
-                        print(f"✅ 最大サンプル数 {max_samples} に到達")
-                        break
-                    
-                    try:
-                        item = json.loads(line.strip())
-                        kanji_text = item["output"]      # 漢字混じり文章
-                        katakana_text = item["input"]    # カタカナ文章
-                        
-                        # データ品質チェック（少し緩和して多様性確保）
-                        if len(kanji_text) > 80 or len(katakana_text) > 80:
-                            continue
-                        
-                        if len(kanji_text) < 3 or len(katakana_text) < 3:
-                            continue
-                        
-                        if not kanji_text.strip() or not katakana_text.strip():
-                            continue
-                        
-                        # カタカナ純度事前チェック
-                        katakana_chars = len([c for c in katakana_text if '\u30A0' <= c <= '\u30FF'])
-                        total_chars = len([c for c in katakana_text if not c.isspace()])
-                        if total_chars > 0 and katakana_chars / total_chars < 0.7:
-                            continue
-                        
-                        # Gemma-3会話形式でフォーマット
-                        conversation_data = format_gemma3_conversation(kanji_text, katakana_text)
-                        
-                        # トークン長チェック
-                        text = tokenizer.apply_chat_template(
-                            conversation_data["conversations"], 
-                            tokenize=False
-                        )
-                        
-                        if len(tokenizer.encode(text)) <= max_seq_length:
-                            data.append(conversation_data)
-                            sample_count += 1
-                            
-                            if sample_count % 1000 == 0:
-                                print(f"📊 処理済み: {sample_count}/{total_lines} (サンプリング率: {sample_rate*100:.1f}%)")
-                        
-                        # メモリ管理
-                        if sample_count % 10000 == 0:
-                            gc.collect()
-                    
-                    except (json.JSONDecodeError, KeyError) as e:
-                        continue
-                    except Exception as e:
-                        if line_num % 20000 == 0:
-                            print(f"⚠️ 行 {line_num} でエラー: {e}")
-                        continue
-                        
-                if sample_count >= max_samples:
-                    break
-                    
-        except FileNotFoundError:
-            print(f"❌ ファイルが見つかりません: {file_path}")
-            continue
-    
-    print(f"✅ L4最適化データセット作成完了: {len(data)} サンプル (総行数: {total_lines})")
-    return Dataset.from_list(data)
 
 def apply_chat_template(examples):
     """チャットテンプレートを適用"""
@@ -188,14 +110,14 @@ if not os.path.exists(cache_dir):
     )
     raw = raw.map(
         lambda examples: {"conversations":[format_gemma3_conversation(o,i)["conversations"] for o,i in zip(examples["output"], examples["input"])]},
-        batched=True, batch_size=1000, num_proc=16, remove_columns=["input","output","left_context"]
+        batched=True, batch_size=2000, num_proc=8, remove_columns=["input","output","left_context"]
     )
     raw.save_to_disk(cache_dir)
 dataset = load_from_disk(cache_dir)
 
-# サニティテスト: 100件のみ使用
-dataset = dataset.select(list(range(min(100, len(dataset)))))
-print(f"⚠️ サニティテスト実行: {len(dataset)} 件のみ使用")
+# 学習用サンプルを制限
+dataset = dataset.select(range(min(MAX_TRAIN_SAMPLES, len(dataset))))
+print(f"📊 データセットサイズ: {len(dataset)} 件")
 
 print("🔄 トークナイズとバッチパディング／トランケーションを並列実行中...")
 dataset = dataset.map(
@@ -206,13 +128,13 @@ dataset = dataset.map(
         max_length=max_seq_length
     ),
     batched=True,
-    batch_size=1000,
+    batch_size=2000,
     num_proc=16,
     remove_columns=["conversations"]
 )
 
 # サンプル確認
-print("\n=== 📋 L4最適化サンプル確認 ===")
+print("\n=== L4最適化サンプル確認 ===")
 for i in range(min(3, len(dataset))):
     sample = dataset[i]
     # input_ids をデコードしてテキスト出力
@@ -237,39 +159,39 @@ trainer = SFTTrainer(
     train_dataset=dataset,
     args=SFTConfig(
         dataset_text_field="input_ids",
-        per_device_train_batch_size=48,  # L4の23GBメモリを最大活用（大幅増加）
-        gradient_accumulation_steps=2,   # 実効バッチサイズ = 192
-        warmup_steps=150,                # より多くのウォームアップ
-        num_train_epochs=30,              # エポック数増加
-        learning_rate=1e-3,              # より大きなバッチサイズに対応
-        logging_steps=5,                 # より細かいログ出力（TensorBoard用）
-        save_steps=100,                  # より頻繁な保存
-        eval_steps=100,                  # 評価ステップ追加
-        optim="adamw_torch_fused",       # より高速なオプティマイザー
-        weight_decay=0.02,               # 過学習防止強化
-        lr_scheduler_type="cosine",      # コサインスケジューラー
+        per_device_train_batch_size=256,  # バッチサイズを192に変更
+        gradient_accumulation_steps=2,
+        warmup_steps=150,
+        num_train_epochs=3,
+        learning_rate=5e-4,
+        logging_steps=100,
+        save_steps=500,  # save_stepsを500に変更
+        eval_steps=1000,
+        optim="adamw_torch_fused",
+        weight_decay=0.02,
+        lr_scheduler_type="cosine",
         seed=3407,
         output_dir="./outputs/gemma3_1b_kanji2kana_sft_l4_optimized",
-        report_to="tensorboard",         # TensorBoard有効化
-        logging_dir="./logs/tensorboard_sft_l4", # TensorBoardログディレクトリ
-        dataloader_pin_memory=True,      # データローダー最適化
-        dataloader_num_workers=8,        # データ読み込み並列度
-        gradient_checkpointing=False,    # GPU高速化（メモリ十分なため）
-        bf16=False,                      # bfloat16を無効化(T4では動作しない、L4では動作する)
-        fp16=False,                      # float16を無効化し float32 を使用（Gemma-3では動作しない）
-        max_grad_norm=1.0,               # 勾配クリッピング
-        remove_unused_columns=False,     # メタデータ保持
-        save_total_limit=5,              # 保存モデル数制限
+        report_to="tensorboard",
+        logging_dir="./logs/tensorboard_sft_l4",
+        dataloader_pin_memory=True,
+        dataloader_num_workers=8,
+        gradient_checkpointing=True,  # グラデーションチェックポイントを有効化
+        bf16=True,
+        fp16=False,
+        max_grad_norm=1.0,
+        remove_unused_columns=False,
+        save_total_limit=20,
     ),
 )
 
 print("🚀 L4最大活用 Gemma-3-1B SFT訓練開始...")
 print("🔥 L4最適化設定:")
-print(f"  - バッチサイズ: 48 (元の2倍)")
-print(f"  - 実効バッチサイズ: 192 (元の6倍)")
-print(f"  - データサンプル数: {len(dataset)} (元の約2.7倍)")
-print(f"  - LoRAランク: {lora_rank} (元の4倍)")
-print(f"  - シーケンス長: {max_seq_length} (効率化)")
+print(f"  - バッチサイズ: {trainer.args.per_device_train_batch_size}")
+print(f"  - 実効バッチサイズ: {trainer.args.per_device_train_batch_size * trainer.args.gradient_accumulation_steps}")
+print(f"  - データサンプル数: {len(dataset)}")
+print(f"  - LoRAランク: {lora_rank}")
+print(f"  - シーケンス長: {max_seq_length}")
 
 # メモリ使用量確認
 if torch.cuda.is_available():
@@ -372,42 +294,3 @@ if torch.cuda.is_available():
 print(f"\n✅ L4最適化 Gemma-3-1B Kanji2Kana SFT訓練完了！")
 print(f"💾 保存先: {save_dir}")
 print(f"📊 使用データ: {len(dataset)} サンプル")
-
-print("\n" + "="*70)
-print("🚀 L4 SFT最適化の詳細改善点:")
-print("="*70)
-print("【メモリ活用】")
-print("- バッチサイズ: 32 → 96 (3倍増)")
-print("- 実効バッチサイズ: 32 → 192 (6倍増)")
-print("- シーケンス長: 384 → 320 (効率化)")
-print("- LoRAランク: 32 → 64 (2倍増)")
-print("")
-print("【データ品質】")
-print(f"- サンプル数: 30,000 → {len(dataset)} (約2.7倍増)")
-print("- 品質フィルタリング強化")
-print("")
-print("【学習効率】")
-print("- エポック数: 2 → 3 (1.5倍増)")
-print("- オプティマイザー: adamw_8bit → adamw_torch_fused")
-print("- スケジューラー: linear → cosine")
-print("- より細かい評価・保存")
-print("")
-print("🎯 期待される大幅改善:")
-print("- 学習速度: 約6倍高速化")
-print("- GPUメモリ活用率: 15% → 70-85%")
-print("- カタカナ変換精度の向上")
-print("- より安定した学習")
-print("")
-print("⚡ L4の23GBメモリを最大限活用する設定完了！")
-
-# RAM使用量に関するアドバイス
-print("\n" + "="*60)
-print("💡 RAM使用量について:")
-print("="*60)
-print(f"推奨RAM: 32GB以上")
-print("必要最小RAM: 24GB")
-print("")
-print("🔥 40GBデータ処理時の推奨スペック:")
-print("- RAM: 64GB以上")
-print("- GPU: 24GB以上 (A6000/RTX4090等)")
-print("- SSD: 100GB以上の空き容量") 
