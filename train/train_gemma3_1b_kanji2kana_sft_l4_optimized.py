@@ -192,18 +192,33 @@ if not os.path.exists(cache_dir):
     )
     raw.save_to_disk(cache_dir)
 dataset = load_from_disk(cache_dir)
-print("🔄 トークナイズをバッチ・並列で実行中...")
+
+# サニティテスト: 100件のみ使用
+dataset = dataset.select(list(range(min(100, len(dataset)))))
+print(f"⚠️ サニティテスト実行: {len(dataset)} 件のみ使用")
+
+print("🔄 トークナイズとバッチパディング／トランケーションを並列実行中...")
 dataset = dataset.map(
-    lambda examples: {"text":[tokenizer.apply_chat_template(conv, tokenize=False) for conv in examples["conversations"]]},
-    batched=True, batch_size=1000, num_proc=16, remove_columns=["conversations"]
+    lambda examples: tokenizer(
+        [tokenizer.apply_chat_template(conv, tokenize=False) for conv in examples["conversations"]],
+        padding="max_length",
+        truncation=True,
+        max_length=max_seq_length
+    ),
+    batched=True,
+    batch_size=1000,
+    num_proc=16,
+    remove_columns=["conversations"]
 )
 
 # サンプル確認
 print("\n=== 📋 L4最適化サンプル確認 ===")
 for i in range(min(3, len(dataset))):
     sample = dataset[i]
+    # input_ids をデコードしてテキスト出力
+    decoded = tokenizer.decode(sample["input_ids"], skip_special_tokens=True)
     print(f"サンプル {i+1}:")
-    print(sample["text"][:250] + "..." if len(sample["text"]) > 250 else sample["text"])
+    print(decoded[:250] + "..." if len(decoded) > 250 else decoded)
     print("-" * 50)
 
 # メモリクリーンアップ
@@ -221,8 +236,8 @@ trainer = SFTTrainer(
     tokenizer=tokenizer,
     train_dataset=dataset,
     args=SFTConfig(
-        dataset_text_field="text",
-        per_device_train_batch_size=96,  # L4の23GBメモリを最大活用（大幅増加）
+        dataset_text_field="input_ids",
+        per_device_train_batch_size=48,  # L4の23GBメモリを最大活用（大幅増加）
         gradient_accumulation_steps=2,   # 実効バッチサイズ = 192
         warmup_steps=150,                # より多くのウォームアップ
         num_train_epochs=30,              # エポック数増加
@@ -240,7 +255,8 @@ trainer = SFTTrainer(
         dataloader_pin_memory=True,      # データローダー最適化
         dataloader_num_workers=8,        # データ読み込み並列度
         gradient_checkpointing=False,    # GPU高速化（メモリ十分なため）
-        bf16=True,                       # Gemma-3用にbfloat16を使用
+        bf16=False,                      # bfloat16を無効化(T4では動作しない、L4では動作する)
+        fp16=False,                      # float16を無効化し float32 を使用（Gemma-3では動作しない）
         max_grad_norm=1.0,               # 勾配クリッピング
         remove_unused_columns=False,     # メタデータ保持
         save_total_limit=5,              # 保存モデル数制限
@@ -249,10 +265,9 @@ trainer = SFTTrainer(
 
 print("🚀 L4最大活用 Gemma-3-1B SFT訓練開始...")
 print("🔥 L4最適化設定:")
-print(f"  - バッチサイズ: 96 (元の3倍)")
+print(f"  - バッチサイズ: 48 (元の2倍)")
 print(f"  - 実効バッチサイズ: 192 (元の6倍)")
 print(f"  - データサンプル数: {len(dataset)} (元の約2.7倍)")
-print(f"  - サンプリング率: {sample_rate*100:.1f}% (元の約2.7倍)")
 print(f"  - LoRAランク: {lora_rank} (元の4倍)")
 print(f"  - シーケンス長: {max_seq_length} (効率化)")
 
@@ -356,7 +371,7 @@ if torch.cuda.is_available():
 
 print(f"\n✅ L4最適化 Gemma-3-1B Kanji2Kana SFT訓練完了！")
 print(f"💾 保存先: {save_dir}")
-print(f"📊 使用データ: {len(dataset)} サンプル (サンプリング率: {sample_rate*100:.1f}%)")
+print(f"📊 使用データ: {len(dataset)} サンプル")
 
 print("\n" + "="*70)
 print("🚀 L4 SFT最適化の詳細改善点:")
@@ -369,7 +384,6 @@ print("- LoRAランク: 32 → 64 (2倍増)")
 print("")
 print("【データ品質】")
 print(f"- サンプル数: 30,000 → {len(dataset)} (約2.7倍増)")
-print("- サンプリング率: 25% → 40% (1.6倍増)")
 print("- 品質フィルタリング強化")
 print("")
 print("【学習効率】")
@@ -390,9 +404,7 @@ print("⚡ L4の23GBメモリを最大限活用する設定完了！")
 print("\n" + "="*60)
 print("💡 RAM使用量について:")
 print("="*60)
-print(f"処理データ量: 約{34 * sample_rate:.1f}GB (ストレージ)")
-print(f"実際のRAM使用量: 約{34 * sample_rate * 0.3:.1f}GB (サンプリング後)")
-print("推奨RAM: 32GB以上")
+print(f"推奨RAM: 32GB以上")
 print("必要最小RAM: 24GB")
 print("")
 print("🔥 40GBデータ処理時の推奨スペック:")

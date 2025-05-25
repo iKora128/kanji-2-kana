@@ -31,3 +31,6 @@ model/*
 *.log.*
 *.log.*.*
 *.log.*.*.*
+
+# cache
+cache/*
