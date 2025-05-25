@@ -47,6 +47,7 @@ model, tokenizer = FastModel.from_pretrained(
     model_name="unsloth/gemma-3-1b-pt-unsloth-bnb-4bit",
     max_seq_length=max_seq_length,
     load_in_4bit=True,
+    use_gradient_checkpointing=True,
 )
 
 # Gemma-3チャットテンプレート設定
@@ -157,8 +158,8 @@ trainer = SFTTrainer(
     train_dataset=dataset,
     args=SFTConfig(
         dataset_text_field="input_ids",
-        per_device_train_batch_size=128,
-        gradient_accumulation_steps=4,
+        per_device_train_batch_size=256,
+        gradient_accumulation_steps=2,
         warmup_steps=150,
         num_train_epochs=3,
         learning_rate=5e-4,
@@ -166,8 +167,8 @@ trainer = SFTTrainer(
         save_steps=500,
         eval_steps=1000,
         optim = "adamw_8bit",
-        weight_decay=0.02,
-        lr_scheduler_type="cosine",
+        weight_decay=0.01,
+        lr_scheduler_type="linear",
         seed=3407,
         output_dir="./outputs/gemma3_1b_kanji2kana_sft_l4_optimized",
         report_to="tensorboard",
@@ -175,11 +176,10 @@ trainer = SFTTrainer(
         dataloader_pin_memory=True,
         dataloader_num_workers=8,
         gradient_checkpointing=True,  # グラデーションチェックポイントを有効化
-        bf16=True,
-        fp16=False,
         max_grad_norm=1.0,
         remove_unused_columns=False,
         save_total_limit=20,
+        bf16=True,
     ),
 )
 
