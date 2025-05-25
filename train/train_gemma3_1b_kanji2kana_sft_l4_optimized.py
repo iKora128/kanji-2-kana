@@ -39,16 +39,14 @@ MAX_TRAIN_SAMPLES: int = 1000000   # 学習に使用するサンプル上限を1
 
 # L4最適化モデル設定（23GB活用）
 max_seq_length = 320   # カタカナ変換に最適な長さ（効率重視）
-lora_rank = 16          # LoRAランクを最適化（漢字→カタカナに十分）
-lora_alpha = 32        # より適切なalpha値
+lora_rank = 8          # LoRAランクを最適化（漢字→カタカナに十分）
+lora_alpha = 8        # より適切なalpha値
 
 print("🚀 L4最適化 Gemma-3-1Bモデルとトークナイザーを読み込み中...")
 model, tokenizer = FastModel.from_pretrained(
     model_name="unsloth/gemma-3-1b-pt-unsloth-bnb-4bit",
     max_seq_length=max_seq_length,
     load_in_4bit=True,
-    dtype=torch.bfloat16,  # より効率的な精度
-    use_gradient_checkpointing=True,  # グラデーションチェックポイントを有効化
 )
 
 # Gemma-3チャットテンプレート設定
@@ -66,8 +64,8 @@ model = FastModel.get_peft_model(
     finetune_attention_modules=True,
     finetune_mlp_modules=True,
     r=lora_rank,
-    lora_alpha=lora_alpha,      # より適切なalpha値
-    lora_dropout=0.03,             # 過学習防止を少し緩和
+    lora_alpha=lora_alpha,
+    lora_dropout=0.01,         
     bias="none",
     random_state=3407,
 )
@@ -159,15 +157,15 @@ trainer = SFTTrainer(
     train_dataset=dataset,
     args=SFTConfig(
         dataset_text_field="input_ids",
-        per_device_train_batch_size=256,  # バッチサイズを192に変更
-        gradient_accumulation_steps=2,
+        per_device_train_batch_size=128,
+        gradient_accumulation_steps=4,
         warmup_steps=150,
         num_train_epochs=3,
         learning_rate=5e-4,
         logging_steps=100,
-        save_steps=500,  # save_stepsを500に変更
+        save_steps=500,
         eval_steps=1000,
-        optim="adamw_torch_fused",
+        optim = "adamw_8bit",
         weight_decay=0.02,
         lr_scheduler_type="cosine",
         seed=3407,
